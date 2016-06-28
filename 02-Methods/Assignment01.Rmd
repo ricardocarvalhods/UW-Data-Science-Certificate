@@ -1,0 +1,254 @@
+---
+title: "Exploratory Analysis of Auto Data"
+author: "Ricardo S. Carvalho"
+date: "June 27th, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width='100%')
+options(width = 110)
+```
+
+## Summary
+
+This document is intended to be a concise report to explain a few takeaways of a dataset containing information about cars (available <a target='_blank' href="https://raw.githubusercontent.com/StephenElston/DataScience350/master/Lecture1/Automobile%20price%20data%20_Raw_.csv">here</a>). The analysis was created as part of the **Data Science Certificate** in the class **Methods for Data Analysis** at **University of Washington**.
+
+The idea is to show some findings regarding information related to the price of the cars. Some functions created for this purpose are included in the appendix.
+
+The report starts with data loading/cleaning, followed by the exploratory analysis with three sections with takeaways for price related to weight, make and drive wheel of cars. Finally, some initial basic modeling for exploration is done to close the report.
+
+***
+
+## Data Loading and Cleaning
+
+First we load the file with the functions created for this report (included in the appendix). Then the data is loaded using the function **read.auto**, that also coerces some character columns to numeric and adjusts the columns **num.of.doors** and **num.of.cylinders**, that have numerical data in the form of text (see the function **read.auto** in the appendix at the end of this report for more info).
+
+```{r}
+# load created functions
+source('Functions.R')
+
+# read.auto function loads and cleans the data
+Auto.Price = read.auto(path = '.') # function read.auto is included in the appendix
+summary(Auto.Price)
+```
+
+We can see that a few columns have NA values, and we have features like **make** and **fuel.system** that are categorical variables with a high number of levels.
+
+Also, although not seen in the summary, some features have inter-relationships. For example, the **diesel** level of **fuel.type** is only found in the level **idi** of **fuel.system** and vice-versa, as we can see below.
+
+```{r}
+table(Auto.Price$fuel.type, Auto.Price$fuel.system)
+```
+
+These will only be treated later with modeling purposes, but it is interesting and vital to notice these cases early on.
+
+***
+
+## Exploratory Analysis
+Following we have three sections with the takeaways found for price related to drive wheels, weight and make of cars.
+
+***
+
+### Drive Wheels
+
+Drive wheels essentially dictates the traction of the cars, into 4 wheels (4wd), two forward wheels (fwd) or two rear wheels (rwd). Observing the variable **drive.wheels**, we see it has exactly three levels: **4wd**, **fwd** and **rwd**. 
+
+```{r}
+table(Auto.Price$drive.wheels)
+sort(tapply(Auto.Price$price, Auto.Price$drive.wheels, mean, na.rm=TRUE), decreasing=TRUE)
+```
+
+We can also notice that the level **4wd** has very few observations (9 out of 205, ~4%) and therefore may be hard to account while making sure to not overfit. Also, by analyzing the price for each level, we see that **rwd** has a higher mean price than **fwd**. The following plot also seems to confirm this hypothesis.
+
+```{r}
+library(ggplot2)
+ggplot(Auto.Price[Auto.Price$drive.wheels %in% c('fwd','rwd'),], aes(price)) + 
+    geom_histogram(binwidth=1000, na.rm=TRUE) + facet_grid(. ~ drive.wheels) + 
+    labs(title = "Histogram of Price by Drive Wheels fwd and rwd") + labs(x = "Price (US$)", y = "Frequency")
+```
+
+To assert this hypothesis, we do a Welch Two Sample t-test, defining the following null and alternative hypothesis:
+
+- **Null Hypothesis - H0**: Mean price of **rwd** is equal to the mean price of **fwd**+**4wd**
+- **Alternative Hypothesis - H1**: Mean price of **rwd** is greater than the mean price of **fwd**+**4wd**
+
+```{r}
+t.test(Auto.Price$price[Auto.Price$drive.wheels == 'rwd'], 
+       Auto.Price$price[Auto.Price$drive.wheels != 'rwd'], "greater", 0, FALSE, FALSE, 0.95)
+```
+
+With a very small p-value, we can reject the null hypothesis, confirming our finding that the mean price of **rwd** drive wheel is greater than the mean price of the other two levels.
+
+***
+
+### Curb Weight
+
+The Curb Weight is the total weight of a vehicle with all of its standard equipment. We found this feature by looking at the numerical variables that have the highest correlation with price, as we can see below.
+
+```{r}
+# Obtain numeric-like columns of Auto.Price
+numerical.cols <- getColsOfClass(Auto.Price, "num") # function getColsOfClass is included in the appendix
+
+# Obtain three highest correlated (absolute correlation) features with Price
+featCorPrice() # function featCorPrice is included in the appendix
+
+# Obtain three highest correlated (absolute correlation) features with LOG of Price
+featCorPrice(log) # function featCorPrice is included in the appendix
+```
+
+Basically, we looked at the correlation of the numerical features with price and then with log(price). First we see that curb.weight is the highest correlated variable with price (absolute correlation). 
+
+We can also notice that by applying the log in price, we get higher correlation. To observe this relationship we can see below a plot of the variable **curb.weight** by the log(price) with a linear regression line added.
+
+```{r warning=FALSE}
+ggplot(Auto.Price, aes(curb.weight, log(price))) + geom_point(aes(alpha = 0.2, size=2)) + 
+    guides(alpha=F,size=F) + stat_smooth(method = "lm", level = 0.95, colour = "red") + 
+    labs(title = "Scatterplot of Curb Weight by Log of Price with Linear Regression Line") + 
+    labs(x = "Curb Weight (lbs)", y = "Log of Price")
+```
+
+The image confirms the linear relationship between **curb.weight** and **log(price)**.
+
+***
+
+### Make
+
+Intuitively, make should be a variable that influences the price of the cars. We already saw that the feature has many levels, so to try to avoid reaching conclusions based on data that is not representative, we will limit **make** for those that have more than 10 observations among the 205 rows (~5%).
+
+```{r}
+make.ten.or.more <- names(sort(table(Auto.Price$make)[table(Auto.Price$make) > 10], decreasing = TRUE))
+sort(with(Auto.Price[Auto.Price$make %in% make.ten.or.more,], tapply(price, make, mean, na.rm=TRUE)), decreasing = TRUE)
+```
+
+Sorting the price for each **make** with more than 10 observations we see that **volvo** and **peugeot** (misspelled as peugot) have higher mean prices. Now we can look at the density plots for these makes.
+
+```{r}
+ggplot(Auto.Price[Auto.Price$make %in% make.ten.or.more,], aes(price,fill=make)) + 
+    geom_density(na.rm = TRUE) + facet_grid(. ~ make) + guides(fill=F) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5)) + 
+    labs(title = "Density Plot of Price by Make") + labs(x = "Price (US$)", y = "Density")
+```
+
+One make that has a high mean price and is considerably skewed is **peugeot**. Below we compare its price with the other makes to assess the difference.
+
+```{r warning=FALSE}
+library(gridExtra)
+bp1 = ggplot(Auto.Price[Auto.Price$make == 'peugot',], aes(1:11, price)) + geom_boxplot() + 
+    theme(axis.ticks=element_blank(), axis.text.x = element_blank()) + labs(x = "Peugeot", y = "Price (US$)")
+bp2 = ggplot(Auto.Price[Auto.Price$make != 'peugot',], aes(1:194, price)) + geom_boxplot() + 
+    theme(axis.ticks=element_blank(), axis.text.x = element_blank()) + labs(x = "Others", y = "Price (US$)")
+grid.arrange(bp1, bp2, nrow = 1, top = "Boxplots of Price for Peugeot and other makes")
+```
+
+The plots confirm our hypothesis that Peugeot stands out amongst the makes by having a higher mean price.
+
+***
+
+## Modeling for Exploration
+
+As a final essay, still for exploration purposes, we create a model for the dataset and analyze the results. To control the features and each of the levels of the categorical variables individually, we first transform the factor columns into binary or dummy columns.
+
+```{r message=FALSE}
+library(dummies)
+cols_to_dummy <- getColsOfClass(Auto.Price, "char") # function getColsOfClass is included in the appendix
+dummy.sel <- dummy.data.frame(Auto.Price[,cols_to_dummy], sep="_", drop=T)
+auto.dummy <- cbind(Auto.Price[,-cols_to_dummy], dummy.sel)
+```
+
+After transforming the factor features, we build a simple model with the variables we found in our three takeaways.
+
+```{r}
+# Simple Model
+simple.model <- lm(log(price) ~ curb.weight + drive.wheels_rwd + make_peugot, data=auto.dummy)
+summary(simple.model)
+```
+
+Above we see that with only the three findings we managed to obtain, the model is already giving quite satisfactory results with R-squared of approximatelly 0.84.
+
+Next, we build the model with all of the available features and output the R-squared.
+
+```{r}
+# Full Model
+full.model <- lm(log(price) ~ ., data=auto.dummy)
+summary(full.model)$r.squared
+```
+
+The R-squared above shows us that there is still room to improve, and an even more in-depth analysis can lead to greater results.
+
+It is worth noticing that for modeling purposes there are several other techniques that should be addressed and were skipped in this report (for example, the data should be split into train and test to start with).
+
+***
+
+## Appendix
+
+Functions loaded using the file **Functions.R** are showed below.
+
+```{r, eval=FALSE}
+##  Read the csv file into a data frame
+read.auto <- function(path = 'SET-YOUR-PATH-HERE'){
+    ## Function to read the csv file
+    filePath <- file.path(path, 'Automobile price data _Raw_.csv')
+    auto.price <- read.csv(filePath, header = TRUE, 
+                           stringsAsFactors = TRUE, na.strings = "?")
+    
+    ## Coerce some character columns to numeric
+    numcols <- c('price', 'bore', 'stroke', 'horsepower', 'peak.rpm',
+                 'highway.mpg', 'city.mpg', 'compression.ratio',
+                 'engine.size', 'curb.weight', 'height', 'width',
+                 'length', 'wheel.base', 'normalized.losses',
+                 'symboling')
+    auto.price[, numcols] <- lapply(auto.price[, numcols], as.numeric)
+    
+    ## Clean and tidy num.of.doors
+    auto.price$num.of.doors <- as.character(auto.price$num.of.doors)
+    auto.price$num.of.doors[auto.price$num.of.doors == 'four'] <- 4
+    auto.price$num.of.doors[auto.price$num.of.doors == 'two'] <- 2
+    auto.price$num.of.doors <- as.integer(auto.price$num.of.doors)
+    
+    ## Clean and tidy num.of.cylinders
+    auto.price$num.of.cylinders <- as.character(auto.price$num.of.cylinders)
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'eight'] <- 8
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'five'] <- 5
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'four'] <- 4
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'six'] <- 6
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'three'] <- 3
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'twelve'] <- 12
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'two'] <- 2
+    auto.price$num.of.cylinders <- as.integer(auto.price$num.of.cylinders)
+    
+    auto.price
+}
+
+# Automatically obtain numeric-like or character-like columns of data
+getColsOfClass <- function(full.data, class='num'){
+    if(class=='num'){
+        classesChosen <- c('integer','numeric','double','float')
+    }
+    else{
+        classesChosen <- c('factor','character')
+    }
+    return(sort(unique(sapply(1:ncol(full.data), 
+                              function(x){
+                                  if(class(full.data[,x]) %in% classesChosen){
+                                      x
+                                  }
+                                  else{
+                                      0
+                                  }
+                              }
+    )
+    )
+    )[-1]
+    )
+}
+
+# Obtain three highest correlated (absolute correlation) features of Auto.Price
+featCorPrice <- function(price.function=I, n=3){
+    cor.mat <- cor(Auto.Price[,numerical.cols], price.function(Auto.Price[,'price']), use = 'complete.obs')
+    feat.cor <- abs(cor.mat)
+    feat.cor <- feat.cor[order(feat.cor, decreasing = T),][-1]
+    feat.cor[1:n]
+}
+```
