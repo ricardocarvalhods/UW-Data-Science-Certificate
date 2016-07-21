@@ -1,0 +1,268 @@
+---
+title: "Hypothesis Testing of Auto Data"
+author: "Ricardo S. Carvalho"
+date: "July 18th, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width='100%')
+options(width = 110)
+
+###### LOADING FUNCTIONS CREATED
+# Loading behind the scenes
+
+##  Read the csv file into a data frame
+read.auto <- function(path = 'SET-YOUR-PATH-HERE'){
+    ## Function to read the csv file
+    filePath <- file.path(path, 'Automobile price data _Raw_.csv')
+    auto.price <- read.csv(filePath, header = TRUE, 
+                           stringsAsFactors = TRUE, na.strings = "?")
+    
+    ## Coerce some character columns to numeric
+    numcols <- c('price', 'bore', 'stroke', 'horsepower', 'peak.rpm',
+                 'highway.mpg', 'city.mpg', 'compression.ratio',
+                 'engine.size', 'curb.weight', 'height', 'width',
+                 'length', 'wheel.base', 'normalized.losses',
+                 'symboling')
+    auto.price[, numcols] <- lapply(auto.price[, numcols], as.numeric)
+    
+    ## Clean and tidy num.of.doors
+    auto.price$num.of.doors <- as.character(auto.price$num.of.doors)
+    auto.price$num.of.doors[auto.price$num.of.doors == 'four'] <- 4
+    auto.price$num.of.doors[auto.price$num.of.doors == 'two'] <- 2
+    auto.price$num.of.doors <- as.integer(auto.price$num.of.doors)
+    
+    ## Clean and tidy num.of.cylinders
+    auto.price$num.of.cylinders <- as.character(auto.price$num.of.cylinders)
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'eight'] <- 8
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'five'] <- 5
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'four'] <- 4
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'six'] <- 6
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'three'] <- 3
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'twelve'] <- 12
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'two'] <- 2
+    auto.price$num.of.cylinders <- as.integer(auto.price$num.of.cylinders)
+    
+    auto.price
+}
+
+# Outputs the Q-Q Plot of Price with a function applied to it
+qqPlotOfPrice <- function(price.function=I){
+  library(ggplot2)
+  scaled_price <- as.data.frame(scale(price.function(Auto.Price$price))) # Scales price and applies function
+  names(scaled_price) <- 'price'
+  if(!identical(price.function, I)){ # Defines one of the words of the main title of the plot
+    if(identical(price.function, log)){
+      title_price <- 'Log of Price'
+    }
+    else if(identical(price.function, sqrt)){
+      title_price <- 'Sqrt of Price'
+    }
+    else {
+      title_price <- 'Transformation of Price'
+    }
+  }
+  else {
+    title_price <- 'Price'
+  }
+  # Plots the Q-Q Plot
+  ggplot(scaled_price, aes(sample=price)) + stat_qq(na.rm = TRUE) + 
+    geom_abline(aes(slope=1,intercept=0), color="red", lty="dashed") + 
+    labs(title=paste0("Q-Q Plot of the distribution of ", title_price, " in Auto Data"), y="Sample Quantiles", x="Theoretical Quantiles")
+}
+```
+
+## Summary
+
+This document is intended to be a concise report to explain hypothesis testings performed on a dataset containing information about cars (available <a target='_blank' href="https://raw.githubusercontent.com/StephenElston/DataScience350/master/Lecture1/Automobile%20price%20data%20_Raw_.csv">here</a>). The analysis was created as part of the **Data Science Certificate** in the class **Methods for Data Analysis** at **University of Washington**.
+
+The idea is to show some findings regarding the significance of the price of the cars, more especifically when relating to fuel type, aspiration and drive wheels. Some functions created for this purpose are included in the appendix.
+
+This report considers data already cleaned, as described by "<a href='http://rpubs.com/ricardosc/auto-exploration'>Auto Exploration Report</a>", and starts with the analysis of the distribution of the prices of the cars, followed by the hypothesis testing of price and the variables of interest: fuel type, aspiration and drive wheels.
+
+***
+
+## Price Analysis
+
+Considering that our objective is to later perform hypothesis testing of some variables in the auto data in relation to prices, we should be concerned about the distribution of price, to then be able to use the most suitable type of test.
+
+First we load the functions created (loading omitted from the report, loaded behind the scenes but included in the appendix) for this report. Then the data is loaded using the function **read.auto** and we run a quick summary of **price** to have a first look at the data.
+
+```{r}
+# read.auto function loads and cleans the data
+Auto.Price = read.auto(path = '.') # function read.auto is included in the appendix
+summary(Auto.Price$price)
+```
+
+We can see that NA's exist and we will have to deal with them. Now the first thing to do when analysing distributions is to check its normality. To do this we will use the Q-Q Plot (for reference, go to: <a href='https://en.wikipedia.org/wiki/Q%E2%80%93Q_plot'>Q-Q Plot</a>).
+
+```{r, warning=FALSE}
+qqPlotOfPrice() # function qqPlotOfPrice is included in the appendix
+```
+
+The qqPlotOfPrice function (included in the appendix) scales the data for better visualization, and also deals with the NA's in the price data, by removing them. Looking at the plot produced above, we can see that the sample and theoretical quantiles are not very close to a linear relationship, which is represented by the red dashed line. With this in mind we check the normality of the distribution of the Log of the price.
+
+```{r}
+qqPlotOfPrice(log) # function qqPlotOfPrice is included in the appendix
+```
+
+From this plot we can see that the log of the price is very close to the red dashed line, leading to closer normality. Also, when compared to the Q-Q Plot of price alone, it surely shows a better result. Therefore, we will use the log of the price in our hypothesis tests.
+
+***
+
+## Hypothesis Testing
+Following we have three sections with the testings for hypothesis of relations between price and fuel type, aspiration and drive wheels.
+
+***
+
+### Fuel Type
+
+The fuel of a vehicle is the liquid that supplies the engine. In this dataset we have two types of fuel: **diesel** and **gas**. 
+
+```{r}
+table(Auto.Price$fuel.type)
+sort(tapply(Auto.Price$price, Auto.Price$fuel.type, mean, na.rm=TRUE), decreasing=TRUE)
+```
+
+At first, we notice that the type **gas** has fewer observations (20 out of 205, ~10%) when compared to **diesel** type (185 out of 205, ~90%).
+
+By analyzing the price for each type, we see that they are very close and possibly our test may be inconclusive. To assert this hypothesis, we do a Welch Two Sample t-test, defining the following null and alternative hypothesis:
+
+- **Null Hypothesis - H0**: Mean price of **diesel** is equal to the mean price of **gas**
+- **Alternative Hypothesis - HA**: Mean price of **diesel** is different than the mean price of **gas**
+
+```{r}
+t.test(Auto.Price$price[Auto.Price$fuel.type == 'diesel'], 
+       Auto.Price$price[Auto.Price$fuel.type == 'gas'], "two.sided", 0, FALSE, FALSE, 0.95)
+```
+
+With a not so small p-value, we can **not** reject the null hypothesis. But this does not mean that we can accept the null hypothesis, since there are two possible reasons as to why we failed: the alternative hypothesis was false to begin with; or we did not collect enough evidence for the alternative hypothesis.
+
+***
+
+### Aspiration
+
+Aspiration basically relates to how the engine's internal combustion works, being, for example, power enhanced with chargers. In our dataset there are only two types of aspiration: **std** (standard) or **turbo** (with turbocharger).
+
+```{r}
+table(Auto.Price$aspiration)
+sort(tapply(Auto.Price$price, Auto.Price$aspiration, mean, na.rm=TRUE), decreasing=TRUE)
+```
+
+We can notice that **turbo** has fewer observations (37 out of 205, ~18%) than **std** (168 out of 205, ~82%), but these do not seem to be too extreme to affect our results. 
+
+Also, by analyzing the price for each type of aspiration, we see that **turbo** has a higher mean price than **std**. To assert this hypothesis, we do a Welch Two Sample t-test, defining the following null and alternative hypothesis:
+
+- **Null Hypothesis - H0**: Mean price of **turbo** is lesser or equal than the mean price of **std**
+- **Alternative Hypothesis - HA**: Mean price of **turbo** is greater than the mean price of **std**
+
+```{r}
+t.test(Auto.Price$price[Auto.Price$aspiration == 'turbo'], 
+       Auto.Price$price[Auto.Price$aspiration == 'std'], "greater", 0, FALSE, FALSE, 0.95)
+```
+
+With a very small p-value, we can reject the null hypothesis, confirming our finding that the mean price of **turbo** aspiration is greater than the mean price of the **std** aspiration.
+
+***
+
+### Drive Wheels
+
+Drive wheels essentially dictates the traction of the cars, into 4 wheels (4wd), two forward wheels (fwd) or two rear wheels (rwd). Observing the variable **drive.wheels**, we see it has exactly three levels: **4wd**, **fwd** and **rwd**. 
+
+```{r}
+table(Auto.Price$drive.wheels)
+sort(tapply(Auto.Price$price, Auto.Price$drive.wheels, mean, na.rm=TRUE), decreasing=TRUE)
+```
+
+We can also notice that the level **4wd** has very few observations (9 out of 205, ~4%) and for this reason may be hard to account while making sure to not overfit. Therefore, we will only compare **rwd** and **fwd**.
+
+By analyzing the price for each level, we see that **rwd** has a higher mean price than **fwd**. The following plot also seems to confirm this hypothesis.
+
+```{r}
+library(ggplot2)
+ggplot(Auto.Price[Auto.Price$drive.wheels %in% c('fwd','rwd'),], aes(price)) + 
+    geom_histogram(binwidth=1000, na.rm=TRUE) + facet_grid(. ~ drive.wheels) + 
+    labs(title = "Histogram of Price by Drive Wheels fwd and rwd") + labs(x = "Price (US$)", y = "Frequency")
+```
+
+To assert this hypothesis, we do a Welch Two Sample t-test, defining the following null and alternative hypothesis:
+
+- **Null Hypothesis - H0**: Mean price of **rwd** is lesser or equal than the mean price of **fwd**
+- **Alternative Hypothesis - HA**: Mean price of **rwd** is greater than the mean price of **fwd**
+
+```{r}
+t.test(Auto.Price$price[Auto.Price$drive.wheels == 'rwd'], 
+       Auto.Price$price[Auto.Price$drive.wheels == 'fwd'], "greater", 0, FALSE, FALSE, 0.95)
+```
+
+With a very small p-value, we can reject the null hypothesis, confirming our finding that the mean price of **rwd** drive wheel is greater than the mean price of the **fwd** drive wheel.
+
+***
+
+## Appendix
+
+Functions loaded during the initialization of this report are showed below.
+
+```{r, eval=FALSE}
+##  Read the csv file into a data frame
+read.auto <- function(path = 'SET-YOUR-PATH-HERE'){
+    ## Function to read the csv file
+    filePath <- file.path(path, 'Automobile price data _Raw_.csv')
+    auto.price <- read.csv(filePath, header = TRUE, 
+                           stringsAsFactors = TRUE, na.strings = "?")
+    
+    ## Coerce some character columns to numeric
+    numcols <- c('price', 'bore', 'stroke', 'horsepower', 'peak.rpm',
+                 'highway.mpg', 'city.mpg', 'compression.ratio',
+                 'engine.size', 'curb.weight', 'height', 'width',
+                 'length', 'wheel.base', 'normalized.losses',
+                 'symboling')
+    auto.price[, numcols] <- lapply(auto.price[, numcols], as.numeric)
+    
+    ## Clean and tidy num.of.doors
+    auto.price$num.of.doors <- as.character(auto.price$num.of.doors)
+    auto.price$num.of.doors[auto.price$num.of.doors == 'four'] <- 4
+    auto.price$num.of.doors[auto.price$num.of.doors == 'two'] <- 2
+    auto.price$num.of.doors <- as.integer(auto.price$num.of.doors)
+    
+    ## Clean and tidy num.of.cylinders
+    auto.price$num.of.cylinders <- as.character(auto.price$num.of.cylinders)
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'eight'] <- 8
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'five'] <- 5
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'four'] <- 4
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'six'] <- 6
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'three'] <- 3
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'twelve'] <- 12
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'two'] <- 2
+    auto.price$num.of.cylinders <- as.integer(auto.price$num.of.cylinders)
+    
+    auto.price
+}
+
+# Outputs the Q-Q Plot of Price with a function applied to it
+qqPlotOfPrice <- function(price.function=I){
+  library(ggplot2)
+  scaled_price <- as.data.frame(scale(price.function(Auto.Price$price))) # Scales price and applies function
+  names(scaled_price) <- 'price'
+  if(!identical(price.function, I)){ # Defines one of the words of the main title of the plot
+    if(identical(price.function, log)){
+      title_price <- 'Log of Price'
+    }
+    else if(identical(price.function, sqrt)){
+      title_price <- 'Sqrt of Price'
+    }
+    else {
+      title_price <- 'Transformation of Price'
+    }
+  }
+  else {
+    title_price <- 'Price'
+  }
+  # Plots the Q-Q Plot
+  ggplot(scaled_price, aes(sample=price)) + stat_qq(na.rm = TRUE) + 
+    geom_abline(aes(slope=1,intercept=0), color="red", lty="dashed") + 
+    labs(title=paste0("Q-Q Plot of the distribution of ", title_price, " in Auto Data"), y="Sample Quantiles", x="Theoretical Quantiles")
+}
+```
