@@ -1,0 +1,181 @@
+---
+title: "Linear Model of Automotive Price"
+author: "Ricardo S. Carvalho"
+date: "August 1st, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width='100%')
+options(width = 110)
+
+###### LOADING FUNCTIONS CREATED
+# Loading behind the scenes
+
+##  Read the csv file into a data frame
+read.auto <- function(path = 'SET-YOUR-PATH-HERE'){
+    ## Function to read the csv file
+    filePath <- file.path(path, 'Automobile price data _Raw_.csv')
+    auto.price <- read.csv(filePath, header = TRUE, 
+                           stringsAsFactors = TRUE, na.strings = "?")
+    
+    ## Coerce some character columns to numeric
+    numcols <- c('price', 'bore', 'stroke', 'horsepower', 'peak.rpm',
+                 'highway.mpg', 'city.mpg', 'compression.ratio',
+                 'engine.size', 'curb.weight', 'height', 'width',
+                 'length', 'wheel.base', 'normalized.losses',
+                 'symboling')
+    auto.price[, numcols] <- lapply(auto.price[, numcols], as.numeric)
+    
+    ## Clean and tidy num.of.doors
+    auto.price$num.of.doors <- as.character(auto.price$num.of.doors)
+    auto.price$num.of.doors[auto.price$num.of.doors == 'four'] <- 4
+    auto.price$num.of.doors[auto.price$num.of.doors == 'two'] <- 2
+    auto.price$num.of.doors <- as.integer(auto.price$num.of.doors)
+    
+    ## Since the only NAs in num.of.doors are of cars with body.style sedan, they have 4 doors
+    auto.price$num.of.doors[is.na(auto.price$num.of.doors)] <- 4
+    
+    ## Clean and tidy num.of.cylinders
+    auto.price$num.of.cylinders <- as.character(auto.price$num.of.cylinders)
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'eight'] <- 8
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'five'] <- 5
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'four'] <- 4
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'six'] <- 6
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'three'] <- 3
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'twelve'] <- 12
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'two'] <- 2
+    auto.price$num.of.cylinders <- as.integer(auto.price$num.of.cylinders)
+    
+    auto.price$lnprice <- log(auto.price$price)
+    
+    auto.price
+}
+```
+
+## Summary and conclusions
+
+This document is intended to be a concise report to explain the evaluation of a linear model of automotive price on a dataset containing information about cars (available <a target='_blank' href="https://raw.githubusercontent.com/StephenElston/DataScience350/master/Lecture1/Automobile%20price%20data%20_Raw_.csv">here</a>). The analysis was created as part of the **Data Science Certificate** in the class **Methods for Data Analysis** at **University of Washington**.
+
+The idea is to show some findings regarding the significance and perfomance of a linear model of automotive price created using the continuous varibles engine.size, curb.weight and city.mpg. The function created to load the data is included in the appendix.
+
+The evaluation shows that the linear model of log of price by engine.size, curb.weight and city.mpg gives satisfactory results -- with all three variables having significant coefficientes different than zero -- showing good performance such as R-squared of 0.8381 and gaussian residuals.
+
+***
+
+## Loading the data
+
+This report considers data pre-processing as described by "<a href='http://rpubs.com/ricardosc/auto-categorical-variables'>Analysis of Categorical Variables of Auto Data Report</a>".
+
+```{r}
+## read.auto function loads and cleans the data
+Auto.Price = read.auto(path = '.') # function read.auto is included in the appendix
+```
+
+***
+
+## Linear Modeling
+Following we create the linear regression model of (log of) price by the continuous variables engine.size, curb.weight and city.mpg.
+
+```{r}
+## Creates linear model
+lm.auto = lm(lnprice ~ engine.size + curb.weight + city.mpg, data = Auto.Price)
+```
+
+***
+
+## Significance Evaluation of the Model
+
+To evaluate the significance of the linear model coefficients we use the model summary.
+
+```{r}
+## Model summary
+summary(lm.auto)
+```
+
+We can see from the summary that all three coefficients have a very small p-value for the hypothesis tests with null hypothesis that they are zero. Therefore, rejecting the null hypothesis, we see that all the variables used in the linear model are significant.
+
+Another useful test is shown in the end of the summary: F-statistic. The null hypothesis is that none of the variables used is significant. With a very small p-value, we can also reject the null hypothesis, confirming the coefficients significance.
+
+***
+
+## Performance of the Model
+
+From the model summary above, we see that the model fit has satisfactory performance. It resulted in Adjusted R-squared of 0.8356, which shows that the model explains approximately 84% of the variation in the data.
+
+Diagnostic plots can also be used to evaluate the performance of the model fit.
+
+```{r}
+## Diagnostic plots
+plot(lm.auto)
+```
+
+The first diagnostic plot shows residuals by fitted values. Since we can not spot any pattern of the residuals' variance, it seems reasonable to consider the assumption of homoscedasticity is true. The third plot shows the square of the standardized residuals by fitted values, and corroborates the good perfomance of the model and its homoscedasticity.
+
+The fourth plot shows standardized residuals by leverage, also displaying Cook's distance. From this plot we can see that a few outliers exist and might be a good practice removing them, such as rows 50, 128 and 129.
+
+The second diagnostic plot shows a Q-Q Plot of the standardized residuals. Since the points are close to the dotted line, we can assume a behaviour close to normality for the residuals.
+
+To confirm the normality of the residuals we do a Shapiro-Wilk normality test.
+
+```{r}
+## Shapiro-Wilk normality test
+shapiro.test(residuals(lm.auto))
+```
+
+Contrary to the Q-Q Plot, the Shapiro-Wilk test does not confirm the normality of the residuals, since that with a very small p-value we reject the null hypothesis that the residuals come from a normal distribution. This may not completely invalidate the assumption, since it may need more data to confirm normality using this test.
+
+***
+
+## Conclusion
+
+Thus, the analysis clearly shows a model with good results. All three variables used have significant coefficientes different than zero. The model also has good performance with R-squared of 0.8381 and the residuals seem to follow a normal distribution, as expected.
+
+***
+
+## Appendix
+
+Function used in this report is showed below.
+
+```{r, eval=FALSE}
+##  Read the csv file into a data frame
+read.auto <- function(path = 'SET-YOUR-PATH-HERE'){
+    ## Function to read the csv file
+    filePath <- file.path(path, 'Automobile price data _Raw_.csv')
+    auto.price <- read.csv(filePath, header = TRUE, 
+                           stringsAsFactors = TRUE, na.strings = "?")
+    
+    ## Coerce some character columns to numeric
+    numcols <- c('price', 'bore', 'stroke', 'horsepower', 'peak.rpm',
+                 'highway.mpg', 'city.mpg', 'compression.ratio',
+                 'engine.size', 'curb.weight', 'height', 'width',
+                 'length', 'wheel.base', 'normalized.losses',
+                 'symboling')
+    auto.price[, numcols] <- lapply(auto.price[, numcols], as.numeric)
+    
+    ## Clean and tidy num.of.doors
+    auto.price$num.of.doors <- as.character(auto.price$num.of.doors)
+    auto.price$num.of.doors[auto.price$num.of.doors == 'four'] <- 4
+    auto.price$num.of.doors[auto.price$num.of.doors == 'two'] <- 2
+    auto.price$num.of.doors <- as.integer(auto.price$num.of.doors)
+    
+    ## Since the only NAs in num.of.doors are of cars with body.style sedan, they have 4 doors
+    auto.price$num.of.doors[is.na(auto.price$num.of.doors)] <- 4
+    
+    ## Clean and tidy num.of.cylinders
+    auto.price$num.of.cylinders <- as.character(auto.price$num.of.cylinders)
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'eight'] <- 8
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'five'] <- 5
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'four'] <- 4
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'six'] <- 6
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'three'] <- 3
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'twelve'] <- 12
+    auto.price$num.of.cylinders[auto.price$num.of.cylinders == 'two'] <- 2
+    auto.price$num.of.cylinders <- as.integer(auto.price$num.of.cylinders)
+    
+    auto.price$lnprice <- log(auto.price$price)
+    
+    auto.price
+}
+```
