@@ -1,0 +1,196 @@
+---
+title: "Bayesian Inference of Texting Drivers"
+author: "Ricardo S. Carvalho"
+date: "August 21st, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width='100%')
+options(width = 110)
+
+###### LOADING FUNCTIONS CREATED
+# Loading behind the scenes
+
+## Plot posterior probability after each update
+plot.posterior <- function(beta.par, success, total){
+  failed = total - success
+  number = length(success)
+  par(mfrow = c(length(total),1))
+  for(i in 1:number){
+    triplot(beta.par, c(sum(success[1:i]), sum(failed[1:i])))
+  }
+  par(mfrow = c(1,1))
+}
+## Simulate from the posterior and compute confidence intervals
+simulate.posterior <- function(beta.par, success, total, n=10000, hdi=0.90){
+  failed = total - success
+  beta.post.par <- beta.par + c(sum(success), sum(failed))
+  post.sample <- rbeta(n, beta.post.par[1], beta.post.par[2])
+  par(mfrow = c(1,2))
+  quants = quantile(post.sample, c((1-hdi)/2, (1-hdi)/2 + hdi))
+  breaks = seq(min(post.sample), max(post.sample), length.out = 41)
+  hist(post.sample, breaks = breaks, 
+       main = paste0("Distribution of samples \n with ", hdi*100, "% HDI"),
+       xlab = 'Sample value',
+       ylab = 'Density')
+  abline(v = quants[1], lty = 3, col = 'red', lwd = 3)
+  abline(v = quants[2], lty = 3, col = 'red', lwd = 3)
+  qqnorm(post.sample)
+  par(mfrow = c(1,1))
+  print(quants)
+  return(beta.post.par)
+}
+## Predict using given distribution
+sim.trial <- function(beta, n=100, hdi=0.90){
+  s <- 0:n
+  pred.probs <- pbetap(beta, n, s)
+  plot(s, pred.probs, type="h", 
+       main = 'Probability Distribution of Texting Drivers',
+       xlab = 'Texting Drivers',
+       ylab = 'Predicted Probability')
+  discint(cbind(s, pred.probs), 0.90)
+}
+```
+
+## Summary and conclusions
+
+This document is intended to be a concise report to explain the Bayesian analysis performed on a specific situation of texting drivers. The analysis was created as part of the **Data Science Certificate** in the class **Methods for Data Analysis** at **University of Washington**.
+
+The idea is to show some findings regarding the posterior probability that the driver of a car is texting at a specific intersection, given previous information of the national scenario and also local observations.
+
+The analysis show that the intersection observed has better results in terms of drivers texting when compared to the national probability. In other words, the intersection shows on average less drivers texting than the numbers aggregated nationally.
+
+***
+
+## Prior
+
+Since in terms of Bayesian Inference, we want the posterior to be same family as the likelihood, and in our case we have Bernoulli trials, we need a conjugate prior of a Beta distribution.
+
+We know that **nationally** a driver is texting with a probability of:
+
+* 0.50 at the 0.10 quantile
+* 0.75 at the 0.30 quantile
+
+To later calculate the posterior with the locally observed results, we choose to use the national data as our prior. Therefore, we calculate the Beta distribution of the prior accordingly:
+
+```{r}
+library(LearnBayes)
+beta.par <- beta.select(list(p=0.50, x=0.1), list(p=0.75, x=0.3))
+beta.par ## The parameters of the prior Beta distribution
+```
+
+Therefore, our prior Beta distribution has values $a=0.41$ and $b=1.73$.
+
+***
+
+## Posterior
+
+Locally, we observed cars three times and noted the number of texting drivers:
+
+* 2 texting out of 20 drivers
+* 4 texting out of 20 drivers
+* 1 texting out of 20 drivers
+
+Thus, we have to update our prior belief based on the collected data. Below we plot the prior, likelihood and posterior three times as our belief is updated, using the function **plot.posterior** (included in the Appendix).
+
+```{r}
+plot.posterior(beta.par, c(2,4,1), c(20,20,20))
+```
+
+In the triplots, we can see how the posterior gets closer to the likelihood as we have more data.
+
+***
+
+## Posterior Simulation
+
+Now, to be able to observe future events, we start simulating the distribution of the posterior probability.
+
+With the function **simulate.posterior** (included in the Appendix) we run 10000 trials using the Beta prior calculated before along side the observed data to simulate the posterior probability. We also show, in the plot, the 90% HDI (Highest Density Interval), which gets the interval with approximatelly 90% of the posterior probability.
+
+```{r}
+beta.post.par <- simulate.posterior(beta.par, c(2,4,1), c(20,20,20), n=10000, hdi=0.90)
+```
+
+We can see the distribution of the posterior in the first half of the plot, which seems to be in accordance with the resulting distribution shown in the triplots. Also the QQ-Plot confirms the normality of the posterior.
+
+After the plots we have the values of the upper and lower limits of the 90% HDI in the variable.
+
+***
+
+## Comparing Local and National Predictions
+
+Finally, we perform predictions of the next 100 drivers, first locally and then nationally, using the function **sim.trial** (included in the Appendix).
+
+To predict if drivers are texting in the **local** scenario, we use the **posterior** obtained before.
+
+```{r}
+sim.trial(beta.post.par, 100)
+```
+
+The results show that **locally** we have in the ~91% HDI, possible number of texting drivers ranging from 4 to 20 for the next 100, concentrating at aroung 11 texting drivers.
+
+To predict if drivers are texting in the **national** scenario, we use the **prior** given in the problem.
+
+```{r}
+sim.trial(beta.par, 100)
+```
+
+The results show that **nationally** we have in the ~90% HDI, possible number of texting drivers ranging from 0 to 55 for the next 100.
+
+Observing the plot above, we can see that the national average of texting drivers seems higher when compared to the location.
+
+***
+
+## Conclusion
+
+From the analysis above we can conclude that the drivers in the location observer are better than the national figures, since the results indicate a lower number of texting drivers.
+
+***
+
+## Appendix
+
+Functions used in this report are showed below.
+
+```{r, eval=FALSE}
+## Plot posterior probability after each update
+plot.posterior <- function(beta.par, success, total){
+  failed = total - success
+  number = length(success)
+  par(mfrow = c(length(total),1))
+  for(i in 1:number){
+    triplot(beta.par, c(sum(success[1:i]), sum(failed[1:i])))
+  }
+  par(mfrow = c(1,1))
+}
+## Simulate from the posterior and compute confidence intervals
+simulate.posterior <- function(beta.par, success, total, n=10000, hdi=0.90){
+  failed = total - success
+  beta.post.par <- beta.par + c(sum(success), sum(failed))
+  post.sample <- rbeta(n, beta.post.par[1], beta.post.par[2])
+  par(mfrow = c(1,2))
+  quants = quantile(post.sample, c((1-hdi)/2, (1-hdi)/2 + hdi))
+  breaks = seq(min(post.sample), max(post.sample), length.out = 41)
+  hist(post.sample, breaks = breaks, 
+       main = paste0("Distribution of samples \n with ", hdi*100, "% HDI"),
+       xlab = 'Sample value',
+       ylab = 'Density')
+  abline(v = quants[1], lty = 3, col = 'red', lwd = 3)
+  abline(v = quants[2], lty = 3, col = 'red', lwd = 3)
+  qqnorm(post.sample)
+  par(mfrow = c(1,1))
+  print(quants)
+  return(beta.post.par)
+}
+## Predict using given distribution
+sim.trial <- function(beta, n=100, hdi=0.90){
+  s <- 0:n
+  pred.probs <- pbetap(beta, n, s)
+  plot(s, pred.probs, type="h", 
+       main = 'Probability Distribution of Texting Drivers',
+       xlab = 'Texting Drivers',
+       ylab = 'Predicted Probability')
+  discint(cbind(s, pred.probs), 0.90)
+}
+```
