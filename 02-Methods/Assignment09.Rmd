@@ -1,0 +1,485 @@
+---
+title: "Analysis and Modeling of Breast Cancer Data "
+author: "Ricardo S. Carvalho"
+date: "August 29th, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width='100%')
+options(width = 110)
+
+###### LOADING FUNCTIONS CREATED
+# Loading behind the scenes
+
+# Read the txt file into a data frame
+read.breast.cancer.data <- function(path="SET-PATH-HERE"){
+  filePath <- file.path(path, 'breast-cancer-wisconsin.data.txt')
+  # https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Original)
+  
+  cancer <- read.csv(filePath, na.strings='?', stringsAsFactors=F, header=F)
+  
+  names(cancer) <- c('ID', 'Clump.Thickness', 'Uniformity.of.Cell.Size', 'Uniformity.of.Cell.Shape', 
+                     'Marginal.Adhesion', 'Single.Epithelial.Cell.Size', 'Bare.Nuclei', 
+                     'Bland.Chromatin', 'Normal.Nucleoli', 'Mitoses', 'Class')
+  
+  cancer$Class <- as.factor(ifelse(cancer$Class > 3, 'Malignant', 'Benign'))
+  cancer$ID <- NULL
+  return(cancer)
+}
+
+# Multiple Imputation by Chained  Equations - mice package
+impute.missing.data <- function(givenDF, cols.to.consider){
+  library(mice)
+  data.to.consider = givenDF[,cols.to.consider] # only columns with features (not class)
+  set.seed(144)
+  imputed = complete(mice(data.to.consider, printFlag = FALSE))
+  return(cbind(imputed, Class=givenDF$Class))
+}
+
+# Does ANOVA and Tukey's Range Test, outputing results in text and plot for Tukey's
+anova.tests <- function(formula.to.anova, data.to.anova, leftpar=4){
+  aov <- aov(formula.to.anova, data = data.to.anova) # Calculates ANOVA
+  # Print ANOVA
+  cat("  ANOVA\n")
+  print(summary(aov))
+  cat("\n----------------------------------------------------------------\n\n")
+  tukey_anova <- TukeyHSD(aov) # Calculates Tukey's
+  # Print Tukey's
+  print(tukey_anova)
+  par(mar=c(5,leftpar,4,2) + 0.1)
+  plot(tukey_anova, las=1)
+  par(mar=c(5,4,4,2) + 0.1)
+}
+
+# Adjusts column for thresh values given, showing correlation with Class before and after
+adjust.with.discretization <- function(givenDF, thresh.values, col.nr){
+  cat("Correlation with Class BEFORE:", cor(givenDF[,col.nr], ifelse(givenDF$Class == 'Benign', 0, 1)), "\n")
+  
+  # Adjusts ranges given thresh values
+  if(length(thresh.values)==1){
+    givenDF[,col.nr] <- ifelse(givenDF[,col.nr] <= thresh.values, thresh.values, thresh.values+1)
+  }
+  else if(length(thresh.values)==2){
+    givenDF[,col.nr] <- ifelse(givenDF[,col.nr] <= thresh.values[1], thresh.values[1], 
+                               ifelse(givenDF[,col.nr] <= thresh.values[2], thresh.values[2], 
+                                      thresh.values[2]+1)
+    )
+  }
+  cat("---------------------------------------\n")
+  cat("- AFTER adjustment:\n")
+  cat("COLUMN:", names(givenDF)[col.nr])
+  print(table(givenDF[,col.nr], givenDF$Class))
+  cat("---------------------------------------\n")
+  
+  cat("Correlation with Class AFTER:", cor(givenDF[,col.nr], ifelse(givenDF$Class == 'Benign', 0, 1)), "\n")
+  givenDF[,col.nr] <- as.factor(givenDF[,col.nr])
+  
+  return(givenDF)
+}
+
+# Controls hypothesis testing for given data
+hyp.test.col <- function(data.to.test, formula.to.test=NULL, leftpar=4){
+  data.to.test$Class <- as.numeric(data.to.test$Class)-1
+  
+  # if data.to.test[,1] is column with more than 2 levels = anova+tukey
+  if(length(table(data.to.test[,1])) > 2){
+    anova.tests(formula.to.test, data.to.test, leftpar)
+  }
+  else { # if data.to.test[,1] is just column that has only 2 levels = t.test
+    value1 <- names(table(data.to.test[,1]))[2]
+    value2 <- names(table(data.to.test[,1]))[1]
+    cat("Null Hyp.: for column '", names(data.to.test)[1], "', chance of malignant tumor for value", value1, "is less or equal than", value2, "\n")
+    cat("Alt. Hyp.: for column '", names(data.to.test)[1], "', chance of malignant tumor for value", value1, "is greater than", value2, "\n")
+    print(t.test(data.to.test$Class[data.to.test[,1] == value1], 
+                 data.to.test$Class[data.to.test[,1] == value2], "greater", 0, FALSE, FALSE, 0.95))
+  }
+}
+
+# Analyse the correlation of numeric columns of given data frame and suggests elimination for given cutoff
+feat.correlation.analysis <- function(givenDF, numeric.cols, corr.cutoff=0.75){
+  library(corrplot)
+  library(caret)
+  corrplot(cor(givenDF[,numeric.cols]), title = 'Correlation Plot')
+  # Before
+  descrCor <- cor(givenDF[,numeric.cols])
+  cat("Summary of correlation before: \n")
+  print(summary(descrCor[upper.tri(descrCor)]))
+  # Finding correlation
+  highlyCorDescr <- findCorrelation(descrCor, cutoff = corr.cutoff, exact=TRUE)
+  cols.to.eliminate <- names(givenDF[,numeric.cols])[highlyCorDescr] # TO ELIMINATE
+  cat("\nSuggestion: Remove column(s)", cols.to.eliminate, "\n")
+  # After
+  filteredDescr <- (givenDF[,c(numeric.cols)])[,-highlyCorDescr]
+  descrCor2 <- cor(filteredDescr)
+  cat("\nSummary of correlation after eliminating '", cols.to.eliminate, "': \n")
+  print(summary(descrCor2[upper.tri(descrCor2)]))
+}
+
+# Creates model and uses 10-fold cross validation
+create.model <- function(method, data.to.model){
+  library(caret)
+  cvCtrl <- trainControl("cv", 10, savePred=T) # 10-fold Cross Validation
+  set.seed(123)
+  model <- train(Class ~ .,
+                 data = data.to.model,
+                 method = method,
+                 trControl = cvCtrl)
+  model
+  print(paste0("Method: ", method, " -- 10-fold CV Accuracy = ", round(100*max(model$results$Accuracy), 3), "%"))
+  return(model)
+}
+```
+
+## Summary
+
+This document is intended to be a concise report to explain a few takeaways of a dataset containing information about breast cancer (available <a target='_blank' href="https://raw.githubusercontent.com/ricardoscr/UW-Data-Science-Certificate/master/02-Methods/breast-cancer-wisconsin.data.txt">here</a>) obtained at UCI Machine Learning Repository on <a target='_blank' href="https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Original)">this link</a>. The analysis was created as part of the **Data Science Certificate** in the class **Methods for Data Analysis** at **University of Washington**.
+
+The idea is to perform an exploratory analysis of the information contained in the dataset, figuring out ways of making the dataset tidier. The ultimate objective is to, in the end, build and compare models to predict if a given tumor is benign or malignant (breast cancer) using the information available on this dataset. Some functions created for this purpose are included in the appendix.
+
+The analysis show that, with a Random Forest model, we can predict if a given tumor is malignant with 97.86% of Accuracy. This result is 1.96% higher than the Accuracy of 95.90% reported in the UCI Machine Learning as the highest for this dataset. We also conclude that the most important information for this prediction is the 'uniformity of the cell size'.
+
+***
+
+## Data Loading and Initial Summary
+
+First we load the functions created (loading omitted from the report, loaded behind the scenes but included in the appendix) for this report. Then the data is loaded using the function **read.breast.cancer.data**, that also puts the values **?** as NAs, name the columns appropriately, give real names for the Class column; and removes the ID proxy column.
+
+```{r}
+cancer <- read.breast.cancer.data(".") # function is included in the appendix
+summary(cancer)
+```
+
+We can see that the column **Bare.Nuclei** have 16 NA values, and we have only numerical features in the dataset. Also we now define our baseline accuray as 458/(458+241), that is, 65.52% -- as this is our metric if we guess every instance as the majority class (Benign). 
+
+To deal with the NA values of the column **Bare.Nuclei**, we use the method called MICE (Multiple Imputation by Chained  Equations), from the mice package, to impute the NA values with the ones most suited considering all 9 columns of featuers.
+
+```{r, warning=FALSE, message=FALSE}
+cancer <- impute.missing.data(cancer, cols.to.consider=c(1:9)) # function is included in the appendix
+summary(cancer)
+```
+
+From this last summary of the data we can see that the column **Bare.Nuclei** has no more NA values. Also if we compare this summary of that column with the previous summary (before imputation), we see that the stats are basically the same.
+
+***
+
+## Exploratory Analysis
+To start exploring our data and later also be able to create models correctly, we need to separate our data into **train** and **test** data. This is done to simulate a real world dataset (test) that have class information and is not used in anyway during the analysis (instead we use train). This ensures that our test dataset is really simulating real world data, since it has not been seen during exploration or modeling.
+
+For this purpose we use the R package caTools, as displayed below.
+
+```{r}
+library(caTools)
+set.seed(1000)
+split = sample.split(cancer$Class, SplitRatio = 0.80)
+train = subset(cancer, split==TRUE)
+test = subset(cancer, split==FALSE)
+```
+
+Separating 80% of the dataset for training, we have 559 instances, thus remaining 140 for testing.
+
+***
+
+### Initial Overview
+
+To start with an initial general exploration of the whole dataset, we plot boxplots of the features.
+
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+ggplot(stack(train[,1:9]), aes(x = ind, y = values)) + geom_boxplot() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, vjust=1)) +
+  labs(title = "Boxplots of columns") + labs(x = "", y = "Values") + 
+  scale_y_continuous(breaks = seq(1, 10, by = 1))
+```
+
+We can notice that several columns have outliers, with the column **Mitoses** being the most critical. In the next subsections we aim to explore and adjust the most important of such columns, starting with **Mitoses**.
+
+***
+
+### Mitoses
+
+First, to have a good look at the column **Mitoses**, we observe its values along side the Class column.
+
+```{r}
+table(train$Mitoses, train$Class)
+```
+
+We can see that starting from **Mitoses** of 2, the proportion of Benign and Malignant tumors seems to remain close. Therefore we can group these values to make the information simpler, helping reduce chances of overfitting or influence of outliers in the extremes, thus making future models better for generalization.
+
+```{r}
+train <- adjust.with.discretization(train, c(1), c(9)) # function is included in the appendix
+```
+
+From the results above, wee that the correlation of the column with the class improved considerably after adjustment, therefore confirming the validity of the changes made.
+
+To more formally validate these adjustments, we can also perform a hypothesis test.
+
+```{r}
+hyp.test.col(train[,c(9,10)]) # function is included in the appendix
+```
+
+With a very small p-value, we can reject the null hypothesis, confirming our finding that the grouping created for the column **Mitoses** has a real impact in the chance of the tumor being Malignant. Specifically, we see that the chance of malignant tumor for values of **Mitoses** equal to 2 (or more) is greater than the chance for the value of 1.
+
+***
+
+### Single Epithelial Cell Size
+
+First, to have a good look at the column **Single.Epithelial.Cell.Size**, we observe its values along side the Class column.
+
+```{r}
+table(train$Single.Epithelial.Cell.Size, train$Class)
+```
+
+We can see that starting from **Single.Epithelial.Cell.Size** of 4, the proportion of Benign and Malignant tumors seems to remain close, and also values of 1 and 2 seem to have the same proportion. Therefore we can group these values to make the information simpler, helping reduce chances of overfitting or influence of outliers in the extremes, thus making future models better for generalization.
+
+```{r}
+train <- adjust.with.discretization(train, c(2,3), c(5)) # function is included in the appendix
+```
+
+From the results above, wee that the correlation of the column with the class improved considerably after adjustment, therefore confirming the validity of the changes made.
+
+To more formally validate these adjustments, we can also perform hypothesis tests.
+
+```{r}
+hyp.test.col(train[,c(5,10)], formula(Class ~ Single.Epithelial.Cell.Size)) # function is included in the appendix
+```
+
+The first test above is the standard ANOVA, showing a very small p-value, which indicates that must exist some difference in the chance of the tumor being Malignant for different values of **Single.Epithelial.Cell.Size**. Then to find out which values have differences we also performed the Tukey's Range Test above, that shows a significant positive value for the difference in the chance of the tumor being Malignant for all the groups of values of **Single.Epithelial.Cell.Size** that we created.
+
+Therefore, this confirms our finding that the groups created for the column **Single.Epithelial.Cell.Size** have a real impact in the chance of the tumor being Malignant.
+
+***
+
+
+### Normal Nucleoli
+
+First, to have a good look at the column **Normal.Nucleoli**, we observe its values along side the Class column.
+
+```{r}
+table(train$Normal.Nucleoli, train$Class)
+```
+
+We can see that starting from **Normal.Nucleoli** of 4, the proportion of Benign and Malignant tumors seems to remain close, and also values of 1 and 2 seem to have the same proportion. Therefore we can group these values to make the information simpler, helping reduce chances of overfitting or influence of outliers in the extremes, thus making future models better for generalization.
+
+```{r}
+train <- adjust.with.discretization(train, c(2,3), c(8)) # function is included in the appendix
+```
+
+From the results above, wee that the correlation of the column with the class improved considerably after adjustment, therefore confirming the validity of the changes made.
+
+To more formally validate these adjustments, we can also perform hypothesis tests.
+
+```{r}
+hyp.test.col(train[,c(8,10)], formula(Class ~ Normal.Nucleoli)) # function is included in the appendix
+```
+
+The first test above is the standard ANOVA, showing a very small p-value, which indicates that must exist some difference in the chance of the tumor being Malignant for different values of **Normal.Nucleoli**. Then to find out which values have differences we also performed the Tukey's Range Test above, that shows a significant positive value for the difference in the chance of the tumor being Malignant for all the groups of values of **Normal.Nucleoli** that we created.
+
+Therefore, this confirms our finding that the groups created for the column **Normal.Nucleoli** have a real impact in the chance of the tumor being Malignant.
+
+***
+
+### Correlation Analysis
+
+To observe how the remaining numeric features are related to each other, we look at the correlation matrix for the dataset.
+
+```{r, warning=FALSE, message=FALSE}
+feat.correlation.analysis(train, c(1:4,6:7), corr.cutoff=0.75) # function is included in the appendix
+```
+
+We can see from the correlation plot that all the numeric columns have some certain correlation with each other. Although, from the first summary of the correlations above we can also see that 75% of the correlations are less than 0.70. Therefore, we used a cut-off of 0.75 and received a suggestion to remove the column **Uniformity.of.Cell.Size**. The last summary of correlations confirms the good choice for removing **Uniformity.of.Cell.Size**, since after removing it, the maximum correlation is 0.73. 
+
+With this correlation analysis in mind, we will **not** consider the column **Uniformity.of.Cell.Size** for building a logistic regression model, since it can be negatively affected by the presence of highly correlated features.
+
+***
+
+## Modeling
+
+As a final step we are going to create several models for the dataset and analyze the results. Specifically, we are going to create models with four different methods:
+
+* Random Forest
+* Logistic Regression
+* Decision Trees
+* Support Vector Machines
+
+```{r, warning=FALSE, message=FALSE}
+models <- lapply(c('rf','glm','rpart','svmLinear'), 
+                 function(x) {
+                   if(x=='glm'){create.model(method=x, train[,-2])} # function is included in the appendix
+                   else{create.model(method=x, train)} # function is included in the appendix
+                })
+```
+
+The results show above are those of the 10-fold Cross Validation of the modeling, therefore trying to simulate real world results even before using the test dataset. From the accuracy results, we see that the Random Forest model got the best results.
+
+Therefore, with Random Forest being the chosen model we display the plot that gives us the overall importance of the columns used.
+
+```{r}
+chosen.model <- models[[1]]
+varImpPlot(chosen.model$finalModel, main = 'Importance of Features')
+```
+
+Above we see that the first four columns in order of importance are:
+
+1) Uniformity of Cell Size
+2) Bare Nuclei
+3) Uniformity of Cell Shape
+4) Bland Chromatin
+
+***
+
+### Final Test
+
+Finally, to confirm the validity of our Random Forest model, we apply it to predict the results of the **test** dataset, simulating a situation of real world labeled data.
+
+First we have to transform the columns of the **test** dataset in order to be in the exact same format expected by the model we built, that is, adjust the columns changed in the **train** dataset in the same way.
+
+```{r}
+test <- adjust.with.discretization(test, c(1), c(9))
+test <- adjust.with.discretization(test, c(2,3), c(5))
+test <- adjust.with.discretization(test, c(2,3), c(8))
+```
+
+From the results above we can see that in the **test** dataset, the information seem to also be tidier with the changes performed.
+
+To evaluate the Random Forest model in the **test** dataset, we predict its labels and compare them with the given class values by displaying the confusion matrix and all its derived metrics.
+
+```{r}
+confusionMatrix(predict(chosen.model, newdata=test), test$Class, positive='Malignant')
+```
+
+Observing the results above we conclude that, with a Random Forest model, we can predict if a given tumor is malignant with 97.86% of Accuracy. This result is 1.96% higher than the Accuracy of 95.90% reported in the UCI Machine Learning as the highest for this dataset.
+
+***
+
+## Conclusion
+
+From the analysis above we can conclude that the model created gives excellent accuracy in predicting breast cancer from tumor data, therefore all the exploration and manipulation of the dataset were valid for this purpose.
+
+***
+
+## Appendix
+
+Functions used in this report are showed below.
+
+```{r, eval=FALSE}
+
+# Read the txt file into a data frame
+read.breast.cancer.data <- function(path="SET-PATH-HERE"){
+  filePath <- file.path(path, 'breast-cancer-wisconsin.data.txt')
+  # https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Original)
+  
+  cancer <- read.csv(filePath, na.strings='?', stringsAsFactors=F, header=F)
+  
+  names(cancer) <- c('ID', 'Clump.Thickness', 'Uniformity.of.Cell.Size', 'Uniformity.of.Cell.Shape', 
+                     'Marginal.Adhesion', 'Single.Epithelial.Cell.Size', 'Bare.Nuclei', 
+                     'Bland.Chromatin', 'Normal.Nucleoli', 'Mitoses', 'Class')
+  
+  cancer$Class <- as.factor(ifelse(cancer$Class > 3, 'Malignant', 'Benign'))
+  cancer$ID <- NULL
+  return(cancer)
+}
+
+# Multiple Imputation by Chained  Equations - mice package
+impute.missing.data <- function(givenDF, cols.to.consider){
+  library(mice)
+  data.to.consider = givenDF[,cols.to.consider] # only columns with features (not class)
+  set.seed(144)
+  imputed = complete(mice(data.to.consider, printFlag = FALSE))
+  return(cbind(imputed, Class=givenDF$Class))
+}
+
+# Does ANOVA and Tukey's Range Test, outputing results in text and plot for Tukey's
+anova.tests <- function(formula.to.anova, data.to.anova, leftpar=4){
+  aov <- aov(formula.to.anova, data = data.to.anova) # Calculates ANOVA
+  # Print ANOVA
+  cat("  ANOVA\n")
+  print(summary(aov))
+  cat("\n----------------------------------------------------------------\n\n")
+  tukey_anova <- TukeyHSD(aov) # Calculates Tukey's
+  # Print Tukey's
+  print(tukey_anova)
+  par(mar=c(5,leftpar,4,2) + 0.1)
+  plot(tukey_anova, las=1)
+  par(mar=c(5,4,4,2) + 0.1)
+}
+
+# Adjusts column for thresh values given, showing correlation with Class before and after
+adjust.with.discretization <- function(givenDF, thresh.values, col.nr){
+  cat("Correlation with Class BEFORE:", cor(givenDF[,col.nr], ifelse(givenDF$Class == 'Benign', 0, 1)), "\n")
+  
+  # Adjusts ranges given thresh values
+  if(length(thresh.values)==1){
+    givenDF[,col.nr] <- ifelse(givenDF[,col.nr] <= thresh.values, thresh.values, thresh.values+1)
+  }
+  else if(length(thresh.values)==2){
+    givenDF[,col.nr] <- ifelse(givenDF[,col.nr] <= thresh.values[1], thresh.values[1], 
+                               ifelse(givenDF[,col.nr] <= thresh.values[2], thresh.values[2], 
+                                      thresh.values[2]+1)
+    )
+  }
+  cat("---------------------------------------\n")
+  cat("- AFTER adjustment:\n")
+  cat("COLUMN:", names(givenDF)[col.nr])
+  print(table(givenDF[,col.nr], givenDF$Class))
+  cat("---------------------------------------\n")
+  
+  cat("Correlation with Class AFTER:", cor(givenDF[,col.nr], ifelse(givenDF$Class == 'Benign', 0, 1)), "\n")
+  givenDF[,col.nr] <- as.factor(givenDF[,col.nr])
+  
+  return(givenDF)
+}
+
+# Controls hypothesis testing for given data
+hyp.test.col <- function(data.to.test, formula.to.test=NULL, leftpar=4){
+  data.to.test$Class <- as.numeric(data.to.test$Class)-1
+  
+  # if data.to.test[,1] is column with more than 2 levels = anova+tukey
+  if(length(table(data.to.test[,1])) > 2){
+    anova.tests(formula.to.test, data.to.test, leftpar)
+  }
+  else { # if data.to.test[,1] is just column that has only 2 levels = t.test
+    value1 <- names(table(data.to.test[,1]))[2]
+    value2 <- names(table(data.to.test[,1]))[1]
+    cat("Null Hyp.: for column '", names(data.to.test)[1], "', chance of malignant tumor for value", value1, "is less or equal than", value2, "\n")
+    cat("Alt. Hyp.: for column '", names(data.to.test)[1], "', chance of malignant tumor for value", value1, "is greater than", value2, "\n")
+    print(t.test(data.to.test$Class[data.to.test[,1] == value1], 
+                 data.to.test$Class[data.to.test[,1] == value2], "greater", 0, FALSE, FALSE, 0.95))
+  }
+}
+
+# Analyse the correlation of numeric columns of given data frame and suggests elimination for given cutoff
+feat.correlation.analysis <- function(givenDF, numeric.cols, corr.cutoff=0.75){
+  library(corrplot)
+  library(caret)
+  corrplot(cor(givenDF[,numeric.cols]), title = 'Correlation Plot')
+  # Before
+  descrCor <- cor(givenDF[,numeric.cols])
+  cat("Summary of correlation before: \n")
+  print(summary(descrCor[upper.tri(descrCor)]))
+  # Finding correlation
+  highlyCorDescr <- findCorrelation(descrCor, cutoff = corr.cutoff, exact=TRUE)
+  cols.to.eliminate <- names(givenDF[,numeric.cols])[highlyCorDescr] # TO ELIMINATE
+  cat("\nSuggestion: Remove column(s)", cols.to.eliminate, "\n")
+  # After
+  filteredDescr <- (givenDF[,c(numeric.cols)])[,-highlyCorDescr]
+  descrCor2 <- cor(filteredDescr)
+  cat("\nSummary of correlation after eliminating '", cols.to.eliminate, "': \n")
+  print(summary(descrCor2[upper.tri(descrCor2)]))
+}
+
+# Creates model and uses 10-fold cross validation
+create.model <- function(method, data.to.model){
+  library(caret)
+  cvCtrl <- trainControl("cv", 10, savePred=T) # 10-fold Cross Validation
+  set.seed(123)
+  model <- train(Class ~ .,
+                 data = data.to.model,
+                 method = method,
+                 trControl = cvCtrl)
+  model
+  print(paste0("Method: ", method, " -- 10-fold CV Accuracy = ", round(100*max(model$results$Accuracy), 3), "%"))
+  return(model)
+}
+```
